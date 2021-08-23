@@ -77,6 +77,7 @@ Endpoint! {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::api::v2::order::Amount;
 
   use futures::future::ok;
   use futures::pin_mut;
@@ -130,7 +131,7 @@ mod tests {
         ..Default::default()
       };
 
-      let order = order_aapl(&client).await.unwrap();
+      let order = order_aapl(&client, Amount::quantity(1)).await.unwrap();
       let result = client.issue::<Get>(&request).await;
       cancel_order(&client, order.id).await;
 
@@ -170,7 +171,7 @@ mod tests {
       take_profit: Some(order::TakeProfit::Limit(Num::from(3))),
       ..Default::default()
     }
-    .init("SPY", order::Side::Buy, 1);
+    .init("SPY", order::Side::Buy, Amount::quantity(1));
 
     let api_info = ApiInfo::from_env().unwrap();
     let client = Client::new(api_info);

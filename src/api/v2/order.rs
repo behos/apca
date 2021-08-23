@@ -291,6 +291,43 @@ impl Serialize for StopLoss {
 }
 
 
+/// An abstraction to be able to handle orders in both notional and quantity units.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Amount {
+  /// Wrapper for the quantity field.
+  Quantity {
+    /// A whole number of shares.
+    #[serde(
+      rename = "qty",
+      deserialize_with = "u64_from_str",
+      serialize_with = "u64_to_str"
+    )]
+    quantity: u64,
+  },
+  /// Wrapper for the notional field.
+  Notional {
+    /// A dollar amount to use for the order. This can result in fractional quantities.
+    #[serde(rename = "notional")]
+    notional: Num,
+  },
+}
+
+impl Amount {
+  /// Helper to initialize a quantity
+  #[inline]
+  pub fn quantity(amount: u64) -> Self {
+    Self::Quantity { quantity: amount }
+  }
+
+  /// Helper to initialize a notional
+  #[inline]
+  pub fn notional(amount: Num) -> Self {
+    Self::Notional { notional: amount }
+  }
+}
+
+
 /// A helper for initializing `OrderReq` objects.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OrderReqInit {
@@ -322,13 +359,13 @@ pub struct OrderReqInit {
 
 impl OrderReqInit {
   /// Create an `OrderReq` from an `OrderReqInit`.
-  pub fn init<S>(self, symbol: S, side: Side, quantity: u64) -> OrderReq
+  pub fn init<S>(self, symbol: S, side: Side, amount: Amount) -> OrderReq
   where
     S: Into<asset::Symbol>,
   {
     OrderReq {
       symbol: symbol.into(),
-      quantity,
+      amount,
       side,
       class: self.class,
       type_: self.type_,
@@ -352,9 +389,9 @@ pub struct OrderReq {
   /// Symbol or asset ID to identify the asset to trade.
   #[serde(rename = "symbol")]
   pub symbol: asset::Symbol,
-  /// Number of shares to trade.
-  #[serde(rename = "qty", serialize_with = "u64_to_str")]
-  pub quantity: u64,
+  /// Amount of shares to trade.
+  #[serde(flatten)]
+  pub amount: Amount,
   /// The side the order is on.
   #[serde(rename = "side")]
   pub side: Side,
@@ -506,13 +543,9 @@ pub struct Order {
   /// The symbol of the asset being traded.
   #[serde(rename = "symbol")]
   pub symbol: String,
-  /// The quantity being requested.
-  #[serde(
-    rename = "qty",
-    deserialize_with = "u64_from_str",
-    serialize_with = "u64_to_str"
-  )]
-  pub quantity: u64,
+  /// The amount being requested.
+  #[serde(flatten)]
+  pub amount: Amount,
   /// The quantity that was filled.
   #[serde(
     rename = "filled_qty",
@@ -714,6 +747,8 @@ EndpointNoParse! {
 mod tests {
   use super::*;
 
+  use std::str::FromStr;
+
   use futures::TryFutureExt;
 
   use serde_json::from_str as from_json;
@@ -766,6 +801,24 @@ mod tests {
   }
 
   #[test]
+  fn parse_quantity_amount() {
+    let serialized = r#"{
+    "qty": "15"
+}"#;
+    let amount = from_json::<Amount>(&serialized).unwrap();
+    assert_eq!(amount, Amount::quantity(15));
+  }
+
+  #[test]
+  fn parse_notional_amount() {
+    let serialized = r#"{
+    "notional": "15.12"
+}"#;
+    let amount = from_json::<Amount>(&serialized).unwrap();
+    assert_eq!(amount, Amount::notional(Num::from_str("15.12").unwrap()));
+  }
+
+  #[test]
   fn parse_reference_order() {
     let response = r#"{
     "id": "904837e3-3b76-47ec-b432-046db621571b",
@@ -801,7 +854,7 @@ mod tests {
       DateTime::parse_from_rfc3339("2018-10-05T05:48:59Z").unwrap()
     );
     assert_eq!(order.symbol, "AAPL");
-    assert_eq!(order.quantity, 15);
+    assert_eq!(order.amount, Amount::quantity(15));
     assert_eq!(order.type_, Type::Market);
     assert_eq!(order.time_in_force, TimeInForce::Day);
     assert_eq!(order.limit_price, Some(Num::from(107)));
@@ -819,7 +872,7 @@ mod tests {
         extended_hours,
         ..Default::default()
       }
-      .init(symbol, Side::Buy, 1);
+      .init(symbol, Side::Buy, Amount::quantity(1));
 
       let api_info = ApiInfo::from_env().unwrap();
       let client = Client::new(api_info);
@@ -828,7 +881,7 @@ mod tests {
       client.issue::<Delete>(&order.id).await.unwrap();
 
       assert_eq!(order.symbol, "SPY");
-      assert_eq!(order.quantity, 1);
+      assert_eq!(order.amount, Amount::quantity(1));
       assert_eq!(order.side, Side::Buy);
       assert_eq!(order.type_, Type::Limit);
       assert_eq!(order.time_in_force, TimeInForce::Day);
@@ -862,7 +915,7 @@ mod tests {
       trail_price: Some(Num::from(50)),
       ..Default::default()
     }
-    .init(symbol, Side::Buy, 1);
+    .init(symbol, Side::Buy, Amount::quantity(1));
 
     let api_info = ApiInfo::from_env().unwrap();
     let client = Client::new(api_info);
@@ -871,7 +924,7 @@ mod tests {
     client.issue::<Delete>(&order.id).await.unwrap();
 
     assert_eq!(order.symbol, "SPY");
-    assert_eq!(order.quantity, 1);
+    assert_eq!(order.amount, Amount::quantity(1));
     assert_eq!(order.side, Side::Buy);
     assert_eq!(order.type_, Type::TrailingStop);
     assert_eq!(order.time_in_force, TimeInForce::Day);
@@ -891,7 +944,7 @@ mod tests {
       trail_percent: Some(Num::from(10)),
       ..Default::default()
     }
-    .init(symbol, Side::Buy, 1);
+    .init(symbol, Side::Buy, Amount::quantity(1));
 
     let api_info = ApiInfo::from_env().unwrap();
     let client = Client::new(api_info);
@@ -900,7 +953,7 @@ mod tests {
     client.issue::<Delete>(&order.id).await.unwrap();
 
     assert_eq!(order.symbol, "SPY");
-    assert_eq!(order.quantity, 1);
+    assert_eq!(order.amount, Amount::quantity(1));
     assert_eq!(order.side, Side::Buy);
     assert_eq!(order.type_, Type::TrailingStop);
     assert_eq!(order.time_in_force, TimeInForce::Day);
@@ -921,7 +974,7 @@ mod tests {
       stop_loss: Some(StopLoss::Stop(Num::from(1))),
       ..Default::default()
     }
-    .init("SPY", Side::Buy, 1);
+    .init("SPY", Side::Buy, Amount::quantity(1));
 
     let api_info = ApiInfo::from_env().unwrap();
     let client = Client::new(api_info);
@@ -934,7 +987,7 @@ mod tests {
     }
 
     assert_eq!(order.symbol, "SPY");
-    assert_eq!(order.quantity, 1);
+    assert_eq!(order.amount, Amount::quantity(1));
     assert_eq!(order.side, Side::Buy);
     assert_eq!(order.type_, Type::Limit);
     assert_eq!(order.time_in_force, TimeInForce::Day);
@@ -955,7 +1008,7 @@ mod tests {
       stop_loss: Some(StopLoss::Stop(Num::from(1))),
       ..Default::default()
     }
-    .init("SPY", Side::Buy, 1);
+    .init("SPY", Side::Buy, Amount::quantity(1));
 
     let api_info = ApiInfo::from_env().unwrap();
     let client = Client::new(api_info);
@@ -968,7 +1021,7 @@ mod tests {
     }
 
     assert_eq!(order.symbol, "SPY");
-    assert_eq!(order.quantity, 1);
+    assert_eq!(order.amount, Amount::quantity(1));
     assert_eq!(order.side, Side::Buy);
     assert_eq!(order.type_, Type::Limit);
     assert_eq!(order.time_in_force, TimeInForce::Day);
@@ -992,7 +1045,7 @@ mod tests {
         limit_price: Some(Num::from(1)),
         ..Default::default()
       }
-      .init("AAPL", Side::Buy, 1);
+      .init("AAPL", Side::Buy, Amount::quantity(1));
 
       match client.issue::<Post>(&request).await {
         Ok(order) => {
@@ -1021,7 +1074,25 @@ mod tests {
       limit_price: Some(Num::from(1000)),
       ..Default::default()
     }
-    .init("AAPL", Side::Buy, 100000);
+    .init("AAPL", Side::Buy, Amount::quantity(100000));
+
+    let result = client.issue::<Post>(&request).await;
+    let err = result.unwrap_err();
+
+    match err {
+      RequestError::Endpoint(PostError::InsufficientFunds(..)) => (),
+      _ => panic!("Received unexpected error: {:?}", err),
+    };
+  }
+
+  /// Test that we can submit an order with a notional amount.
+  #[test(tokio::test)]
+  async fn submit_unsatisfiable_notional_order() {
+    let request =
+      OrderReqInit::default().init("SPY", Side::Buy, Amount::notional(Num::new(10000000, 3)));
+
+    let api_info = ApiInfo::from_env().unwrap();
+    let client = Client::new(api_info);
 
     let result = client.issue::<Post>(&request).await;
     let err = result.unwrap_err();
@@ -1050,7 +1121,7 @@ mod tests {
   async fn retrieve_order_by_id() {
     let api_info = ApiInfo::from_env().unwrap();
     let client = Client::new(api_info);
-    let posted = order_aapl(&client).await.unwrap();
+    let posted = order_aapl(&client, Amount::quantity(1)).await.unwrap();
     let result = client.issue::<Get>(&posted.id).await;
     client.issue::<Delete>(&posted.id).await.unwrap();
     let gotten = result.unwrap();
@@ -1061,7 +1132,7 @@ mod tests {
     assert_eq!(posted.asset_class, gotten.asset_class);
     assert_eq!(posted.asset_id, gotten.asset_id);
     assert_eq!(posted.symbol, gotten.symbol);
-    assert_eq!(posted.quantity, gotten.quantity);
+    assert_eq!(posted.amount, gotten.amount);
     assert_eq!(posted.type_, gotten.type_);
     assert_eq!(posted.side, gotten.side);
     assert_eq!(posted.time_in_force, gotten.time_in_force);
@@ -1087,7 +1158,7 @@ mod tests {
       extended_hours: true,
       ..Default::default()
     }
-    .init("SPY", Side::Buy, 1);
+    .init("SPY", Side::Buy, Amount::quantity(1));
 
     let api_info = ApiInfo::from_env().unwrap();
     let client = Client::new(api_info);
@@ -1110,7 +1181,7 @@ mod tests {
       limit_price: Some(Num::from(1)),
       ..Default::default()
     }
-    .init("AAPL", Side::Buy, 1);
+    .init("AAPL", Side::Buy, Amount::quantity(1));
 
     let api_info = ApiInfo::from_env().unwrap();
     let client = Client::new(api_info);
@@ -1135,7 +1206,7 @@ mod tests {
 
     match result {
       Ok(order) => {
-        assert_eq!(order.quantity, 2);
+        assert_eq!(order.amount, Amount::quantity(2));
         assert_eq!(order.time_in_force, TimeInForce::UntilCanceled);
         assert_eq!(order.limit_price, Some(Num::from(2)));
         assert_eq!(order.stop_price, None);
@@ -1158,7 +1229,7 @@ mod tests {
       trail_price: Some(Num::from(20)),
       ..Default::default()
     }
-    .init("SPY", Side::Buy, 1);
+    .init("SPY", Side::Buy, Amount::quantity(1));
 
     let api_info = ApiInfo::from_env().unwrap();
     let client = Client::new(api_info);
@@ -1202,7 +1273,7 @@ mod tests {
       client_order_id: Some(client_order_id.clone()),
       ..Default::default()
     }
-    .init("SPY", Side::Buy, 1);
+    .init("SPY", Side::Buy, Amount::quantity(1));
 
     let api_info = ApiInfo::from_env().unwrap();
     let client = Client::new(api_info);
