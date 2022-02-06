@@ -16,7 +16,6 @@ use uuid::Uuid;
 
 use crate::Str;
 
-
 /// An ID uniquely identifying an asset.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct Id(pub Uuid);
@@ -30,13 +29,15 @@ impl Deref for Id {
   }
 }
 
-
 /// An enumeration of the various asset classes available.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 pub enum Class {
   /// US equities.
   #[serde(rename = "us_equity")]
   UsEquity,
+  /// Crypto.
+  #[serde(rename = "crypto")]
+  Crypto,
 }
 
 impl AsRef<str> for Class {
@@ -44,6 +45,7 @@ impl AsRef<str> for Class {
   fn as_ref(&self) -> &'static str {
     match *self {
       Class::UsEquity => "us_equity",
+      Class::Crypto => "crypto",
     }
   }
 }
@@ -61,12 +63,13 @@ impl FromStr for Class {
   fn from_str(s: &str) -> Result<Self, Self::Err> {
     if s == Class::UsEquity.as_ref() {
       Ok(Class::UsEquity)
+    } else if s == Class::Crypto.as_ref() {
+      Ok(Class::Crypto)
     } else {
       Err(())
     }
   }
 }
-
 
 /// The status an asset can have.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
@@ -96,7 +99,6 @@ impl Default for Status {
   }
 }
 
-
 /// An enumeration of all possible symbol parsing errors.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ParseSymbolError {
@@ -123,7 +125,6 @@ impl Display for ParseSymbolError {
     }
   }
 }
-
 
 /// A symbol, and the various ways to represent it.
 #[derive(Clone, Debug, PartialEq)]
@@ -175,22 +176,22 @@ impl FromStr for Symbol {
           });
 
           if let Err(c) = invalid {
-            return Err(ParseSymbolError::InvalidSymbol(c))
+            return Err(ParseSymbolError::InvalidSymbol(c));
           }
           Self::Sym((*sym).to_string())
         }
-      },
+      }
       [sym, exchg] => {
         let exchg = Exchange::from_str(exchg).map_err(|_| ParseSymbolError::UnknownExchange)?;
 
         Self::SymExchg((*sym).to_string(), exchg)
-      },
+      }
       [sym, exchg, cls] => {
         let exchg = Exchange::from_str(exchg).map_err(|_| ParseSymbolError::UnknownExchange)?;
         let cls = Class::from_str(cls).map_err(|_| ParseSymbolError::UnknownClass)?;
 
         Self::SymExchgCls((*sym).to_string(), exchg, cls)
-      },
+      }
       _ => return Err(ParseSymbolError::InvalidFormat),
     };
     Ok(sym)
@@ -204,7 +205,7 @@ impl Display for Symbol {
       Self::SymExchg(sym, exchg) => write!(fmt, "{}:{}", sym, exchg.as_ref()),
       Self::SymExchgCls(sym, exchg, cls) => {
         write!(fmt, "{}:{}:{}", sym, exchg.as_ref(), cls.as_ref())
-      },
+      }
       Self::Id(id) => write!(fmt, "{}", id.to_hyphenated_ref()),
     }
   }
@@ -218,7 +219,6 @@ impl Serialize for Symbol {
     serializer.serialize_str(&self.to_string())
   }
 }
-
 
 /// An enumeration of the various supported exchanges.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
@@ -288,7 +288,6 @@ impl FromStr for Exchange {
   }
 }
 
-
 /// The representation of an asset as used by Alpaca.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[non_exhaustive]
@@ -327,7 +326,6 @@ pub struct Asset {
   pub fractionable: bool,
 }
 
-
 Endpoint! {
   /// The representation of a GET request to the /v2/assets/<symbol> endpoint.
   pub Get(Symbol),
@@ -346,7 +344,6 @@ Endpoint! {
   }
 }
 
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -360,7 +357,6 @@ mod tests {
 
   use crate::api_info::ApiInfo;
   use crate::Client;
-
 
   #[test]
   fn parse_symbol() {
@@ -464,6 +460,25 @@ mod tests {
 
     let asset = from_json::<Asset>(response).unwrap();
     assert_eq!(asset.exchange, Exchange::Unknown);
+  }
+
+  #[test]
+  fn parse_with_crypto() {
+    let response = r#"{
+  "id": "904837e3-3b76-47ec-b432-046db621571b",
+  "class": "crypto",
+  "exchange": "ABCDEF",
+  "symbol": "BTCUSD",
+  "status": "active",
+  "tradable": true,
+  "marginable": false,
+  "shortable": false,
+  "easy_to_borrow": false,
+  "fractionable": true
+}"#;
+
+    let asset = from_json::<Asset>(response).unwrap();
+    assert_eq!(asset.clas, Class::Crypto);
   }
 
   #[test(tokio::test)]
